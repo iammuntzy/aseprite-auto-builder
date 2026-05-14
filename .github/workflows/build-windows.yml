@@ -1,0 +1,62 @@
+name: Build Aseprite (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: aseprite/aseprite
+          submodules: recursive
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install tools
+        run: choco install ninja cmake jq unzip -y
+
+      - name: Detect Skia
+        shell: bash
+        run: |
+          BRANCH=$(grep -oE 'aseprite-m[0-9]+' INSTALL.md | head -n 1 | sed 's/aseprite-//')
+          RELEASE=$(curl -s https://api.github.com/repos/aseprite/skia/releases \
+            | jq -r ".[] | select(.tag_name | startswith(\"$BRANCH-\")) | .tag_name" \
+            | head -n 1)
+
+          echo "release=$RELEASE" >> $GITHUB_OUTPUT
+
+      - name: Download Skia
+        shell: bash
+        run: |
+          curl -L https://github.com/aseprite/skia/releases/download/${{ steps.detect.outputs.release }}/Skia-Windows-Release-x64.zip -o skia.zip
+          unzip skia.zip -d skia
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR=$PWD/skia \
+            -DSKIA_LIBRARY_DIR=$PWD/skia/out/Release-x64 \
+            -DSKIA_LIBRARY=$PWD/skia/out/Release-x64/skia.lib
+
+      - name: Build
+        run: cmake --build build --target aseprite
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir artifact
+          cp -r build/bin/* artifact/
+          echo '# portable' > artifact/aseprite.ini
+          7z a aseprite-windows.zip artifact/*
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-windows
+          path: aseprite-windows.zip
